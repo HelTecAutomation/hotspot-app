@@ -5,6 +5,7 @@ import TextTicker from 'react-native-text-ticker'
 import { BoxProps } from '@shopify/restyle'
 import { useTranslation } from 'react-i18next'
 import { Easing } from 'react-native'
+import { isTablet } from 'react-native-device-info'
 import Box from '../../../components/Box'
 import {
   fetchStats,
@@ -56,21 +57,27 @@ const HotspotsTicker = ({ ...boxProps }: Props) => {
   )
 
   const text = useMemo(() => {
-    const formattedHotspotCount = hotspotCount?.toLocaleString(locale) || 0
-    const oraclePrice = currentOraclePrice?.price || 0
+    const formattedHotspotCount = hotspotCount?.toLocaleString(locale)
+    const oraclePrice = currentOraclePrice?.price
     const formattedBlockTime = blockTime?.toLocaleString(locale, {
       maximumFractionDigits: 0,
     })
-    return blockTime
-      ? t('hotspots.ticker', {
-          formattedHotspotCount,
-          oraclePrice,
-          formattedBlockTime,
-        })
-      : t('hotspots.ticker_no_block', {
-          formattedHotspotCount,
-          oraclePrice,
-        })
+    const opts = {
+      formattedHotspotCount,
+      oraclePrice: oraclePrice?.floatBalance,
+      formattedBlockTime,
+    }
+    if (blockTime && formattedHotspotCount) {
+      return t('hotspots.ticker', opts)
+    }
+    if (blockTime) {
+      return t('hotspots.ticker_no_hotspots', opts)
+    }
+    if (formattedHotspotCount) {
+      return t('hotspots.ticker_no_block', opts)
+    }
+
+    return t('hotspots.ticker_no_hotspots_or_block', opts)
   }, [blockTime, currentOraclePrice?.price, hotspotCount, t])
 
   return (
@@ -81,8 +88,9 @@ const HotspotsTicker = ({ ...boxProps }: Props) => {
         loop
         repeatSpacer={0}
         easing={Easing.linear}
+        maxFontSizeMultiplier={1.2}
       >
-        {text}
+        {isTablet() ? text + text : text}
       </TextTicker>
     </Box>
   )

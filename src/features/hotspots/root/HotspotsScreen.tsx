@@ -5,15 +5,12 @@ import { ActivityIndicator } from 'react-native'
 import { RootState } from '../../../store/rootReducer'
 import HotspotsView from './HotspotsView'
 import Box from '../../../components/Box'
-import {
-  fetchHotspotsData,
-  fetchRewards,
-} from '../../../store/hotspots/hotspotsSlice'
-import useVisible from '../../../utils/useVisible'
+import { fetchHotspotsData } from '../../../store/hotspots/hotspotsSlice'
 import { useAppDispatch } from '../../../store/store'
 import useGetLocation from '../../../utils/useGetLocation'
 import useAlert from '../../../utils/useAlert'
 import { updateFleetModeEnabled } from '../../../store/account/accountSlice'
+import useMount from '../../../utils/useMount'
 
 const HotspotsScreen = () => {
   const maybeGetLocation = useGetLocation()
@@ -24,7 +21,9 @@ const HotspotsScreen = () => {
   const followedValidators = useSelector(
     (state: RootState) => state.validators.followedValidators.data,
   )
-  const hotspots = useSelector((state: RootState) => state.hotspots.hotspots)
+  const hotspots = useSelector(
+    (state: RootState) => state.hotspots.hotspots.data,
+  )
   const hiddenAddresses = useSelector(
     (state: RootState) => state.account.settings.hiddenAddresses,
   )
@@ -32,7 +31,7 @@ const HotspotsScreen = () => {
     (state: RootState) => state.account.settings.showHiddenHotspots,
   )
   const followedHotspots = useSelector(
-    (state: RootState) => state.hotspots.followedHotspots,
+    (state: RootState) => state.hotspots.followedHotspots.data,
   )
   const hotspotsLoaded = useSelector(
     (state: RootState) => state.hotspots.hotspotsLoaded,
@@ -99,16 +98,10 @@ const HotspotsScreen = () => {
     showOKAlert,
   ])
 
-  useVisible({
-    onAppear: () => {
-      dispatch(fetchHotspotsData())
-      maybeGetLocation(false)
-    },
+  useMount(() => {
+    dispatch(fetchHotspotsData())
+    maybeGetLocation(false)
   })
-
-  useEffect(() => {
-    dispatch(fetchRewards({ fetchType: fleetModeEnabled ? 'followed' : 'all' }))
-  }, [visibleHotspots, dispatch, fleetModeEnabled])
 
   const viewState = useMemo(() => {
     if (!hotspotsLoaded) return 'loading'

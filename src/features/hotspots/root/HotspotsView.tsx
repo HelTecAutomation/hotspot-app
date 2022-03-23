@@ -10,10 +10,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useTranslation } from 'react-i18next'
 import { RootStackParamList } from '../../../navigation/main/tabTypes'
 import Box from '../../../components/Box'
-import Map from '../../../components/Map'
+import Map, { NO_FEATURES } from '../../../components/Map'
 import { RootState } from '../../../store/rootReducer'
 import hotspotDetailsSlice, {
   fetchHotspotData,
+  fetchHotspotDenylists,
 } from '../../../store/hotspotDetails/hotspotDetailsSlice'
 import HotspotsViewHeader from './HotspotsViewHeader'
 import HotspotsList from './HotspotsList'
@@ -37,7 +38,6 @@ import MapFilterModal from '../../map/MapFilterModal'
 import ShortcutNav from './ShortcutNav'
 import { useAppDispatch } from '../../../store/store'
 import { fetchAccountRewards } from '../../../store/account/accountSlice'
-import useVisible from '../../../utils/useVisible'
 import {
   fetchFollowedValidators,
   fetchMyValidators,
@@ -45,15 +45,17 @@ import {
 } from '../../../store/validators/validatorsSlice'
 import ValidatorDetails from '../../validators/ValidatorDetails'
 import {
-  isHotspot,
   isWitness,
   isGlobalOption,
+  isHotspot,
 } from '../../../utils/hotspotUtils'
 import { isValidator } from '../../../utils/validatorUtils'
 import ValidatorExplorer from '../../validators/explorer/ValidatorExplorer'
 import HeliumSelect from '../../../components/HeliumSelect'
 import { HeliumSelectItemType } from '../../../components/HeliumSelectItem'
 import HotspotsEmpty from './HotspotsEmpty'
+import { hasValidCache } from '../../../utils/cacheUtils'
+import { CoverageFeatures } from '../../../components/Coverage'
 
 type Props = {
   ownedHotspots?: Hotspot[]
@@ -107,6 +109,9 @@ const HotspotsView = ({
   const followedValidatorsLoaded = useSelector(
     (state: RootState) => state.validators.followedValidatorsLoaded,
   )
+  const loadingHotspotsForHex = useSelector(
+    (state: RootState) => state.discovery.loadingHotspotsForHex,
+  )
   const [selectedHexId, setSelectedHexId] = useState<string>()
   const [selectedHotspotIndex, setSelectedHotspotIndex] = useState(0)
   const animatedIndex = useSharedValue<number>(0)
@@ -145,16 +150,16 @@ const HotspotsView = ({
 
   const showOwned = useMemo(() => mapFilter === MapFilters.owned, [mapFilter])
 
-  const showRewardScale = useMemo(() => mapFilter === MapFilters.reward, [
-    mapFilter,
-  ])
+  const coverageFeatures: CoverageFeatures | undefined = useMemo(() => {
+    if (mapFilter === MapFilters.reward) return 'transmit'
+    if (mapFilter === MapFilters.earnings) return 'earnings'
+    return undefined
+  }, [mapFilter])
 
-  useVisible({
-    onAppear: () => {
-      dispatch(fetchAccountRewards())
-      dispatch(fetchMyValidators())
-      dispatch(fetchFollowedValidators())
-    },
+  useMount(() => {
+    dispatch(fetchAccountRewards())
+    dispatch(fetchMyValidators())
+    dispatch(fetchFollowedValidators())
   })
 
   useEffect(() => {
@@ -229,6 +234,12 @@ const HotspotsView = ({
 
   const { witnesses } = hotspotDetailsData || {}
 
+  useEffect(() => {
+    if (showWitnesses && !witnesses) {
+      dispatch(fetchHotspotData(hotspotAddress))
+    }
+  }, [mapFilter, hotspotAddress, dispatch, witnesses, showWitnesses])
+
   const hasUserLocation = useMemo(
     () =>
       location &&
@@ -260,39 +271,63 @@ const HotspotsView = ({
 
   const onMapHexSelected = useCallback(
     async (hexId: string, address?: string) => {
-      const hotspots = (await dispatch(fetchHotspotsForHex({ hexId }))) as {
-        payload?: Hotspot[]
-      }
+      if (loadingHotspotsForHex) return
 
+      // set UI until hotspots load
+      setSelectedHexId(hexId)
+
+      setShowTabs(false)
+      handleShortcutItemSelected({ address, locationHex: hexId } as Hotspot)
+
+      let hotspots: Hotspot[] = []
+      if (hexId && hexId !== NO_FEATURES) {
+        // load hotspots in hex and update ui
+
+        const existing = hotspotsForHexId[hexId]
+        if (hasValidCache(existing, 60)) {
+          hotspots = existing.hotspots
+        } else {
+          const response = (await dispatch(fetchHotspotsForHex({ hexId }))) as {
+            payload?: Hotspot[]
+          }
+          if (response.payload) {
+            hotspots = response.payload
+          }
+        }
+      }
       let index = 0
-      if (address && hotspots?.payload) {
-        const foundIndex = hotspots.payload.findIndex(
-          (h) => h?.address === address,
-        )
+      if (address && hotspots) {
+        const foundIndex = hotspots.findIndex((h) => h?.address === address)
         if (foundIndex >= 0) {
           index = foundIndex
         }
       }
-      setSelectedHexId(hexId)
+      if (hotspots[index]?.address) {
+        dispatch(fetchHotspotDenylists(hotspots[index].address))
+      }
       setSelectedHotspotIndex(index)
-      setShowTabs(false)
-      if (hotspots?.payload?.length) {
-        handleShortcutItemSelected(hotspots.payload[index] as Hotspot)
+      if (hotspots?.length) {
+        handleShortcutItemSelected(hotspots[index] as Hotspot)
       }
     },
-    [dispatch, handleShortcutItemSelected],
+    [
+      dispatch,
+      handleShortcutItemSelected,
+      hotspotsForHexId,
+      loadingHotspotsForHex,
+    ],
   )
 
   const handlePresentHotspot = useCallback(
-    async (hotspot: Hotspot) => {
+    async (gateway: Hotspot | Validator) => {
       if (isGlobalOption(shortcutItem)) {
         setDetailHeight(detailSnapPoints.collapsed)
       }
-      handleShortcutItemSelected(hotspot)
+      handleShortcutItemSelected(gateway)
 
-      if (!hotspot.locationHex) return
+      if (!isHotspot(gateway) || !gateway.locationHex) return
 
-      await onMapHexSelected(hotspot.locationHex, hotspot.address)
+      await onMapHexSelected(gateway.locationHex, gateway.address)
     },
     [
       detailSnapPoints.collapsed,
@@ -373,7 +408,7 @@ const HotspotsView = ({
 
   const hexHotspots = useMemo(() => {
     if (!selectedHexId) return []
-    return hotspotsForHexId[selectedHexId]
+    return hotspotsForHexId[selectedHexId]?.hotspots
   }, [hotspotsForHexId, selectedHexId])
 
   const onHotspotSelected = useCallback(
@@ -385,7 +420,8 @@ const HotspotsView = ({
   )
 
   const hotspotHasLocation = useMemo(() => {
-    if (!hotspotAddress || !selectedHotspot) return true
+    if (!hotspotAddress || !selectedHotspot || !selectedHotspot?.owner)
+      return true
 
     return hotspotHasValidLocation(
       selectedHotspot || hotspotDetailsData.hotspot,
@@ -431,7 +467,6 @@ const HotspotsView = ({
           hotspot={selectedHotspot}
           onLayoutSnapPoints={setDetailSnapPoints}
           onChangeHeight={setDetailHeight}
-          onFailure={handleItemSelected}
           onSelectHotspot={handlePresentHotspot}
           toggleSettings={toggleSettings}
           animatedPosition={animatedIndex}
@@ -457,7 +492,6 @@ const HotspotsView = ({
     shortcutItem,
     exploreType,
     selectedHotspot,
-    handleItemSelected,
     toggleSettings,
     animatedIndex,
     handleSearching,
@@ -524,6 +558,7 @@ const HotspotsView = ({
               cameraBottomOffset={cameraBottomOffset}
               ownedHotspots={showOwned ? ownedHotspots : []}
               selectedHotspot={selectedHotspot}
+              selectedHex={selectedHexId}
               maxZoomLevel={12}
               zoomLevel={12}
               witnesses={showWitnesses ? witnesses : []}
@@ -536,7 +571,7 @@ const HotspotsView = ({
               showNoLocation={!hotspotHasLocation}
               showNearbyHotspots
               showH3Grid
-              showRewardScale={showRewardScale}
+              coverageFeatures={coverageFeatures}
               overflow="hidden"
               borderTopLeftRadius="l"
               borderTopRightRadius="l"

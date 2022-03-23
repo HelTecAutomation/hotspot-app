@@ -1,17 +1,11 @@
 /* eslint-disable react/jsx-props-no-spreading */
 import React, { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import { BoxProps } from '@shopify/restyle'
-import Close from '@assets/images/close.svg'
 import CarotDown from '@assets/images/carot-down.svg'
 import Kabob from '@assets/images/kabob.svg'
 import { useTranslation } from 'react-i18next'
-import { Modal, StyleSheet } from 'react-native'
+import { StyleSheet } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import {
-  useAnimatedStyle,
-  useSharedValue,
-  withSpring,
-} from 'react-native-reanimated'
 import { FlatList } from 'react-native-gesture-handler'
 import { Colors, Theme } from '../theme/theme'
 import HeliumActionSheetItem, {
@@ -22,9 +16,7 @@ import { useColors } from '../theme/themeHooks'
 import Text, { TextProps } from './Text'
 import Box from './Box'
 import TouchableOpacityBox from './TouchableOpacityBox'
-import BlurBox from './BlurBox'
-import { ReAnimatedBox } from './AnimatedBox'
-import useVisible from '../utils/useVisible'
+import HeliumBottomSheet from './HeliumBottomSheet'
 
 type Props = BoxProps<Theme> & {
   data: Array<HeliumActionSheetItemType>
@@ -45,7 +37,7 @@ type Props = BoxProps<Theme> & {
 type ListItem = { item: HeliumActionSheetItemType; index: number }
 
 const HeliumActionSheet = ({
-  data,
+  data: propsData,
   selectedValue,
   onValueSelected,
   title,
@@ -63,38 +55,22 @@ const HeliumActionSheet = ({
   const insets = useSafeAreaInsets()
   const [modalVisible, setModalVisible] = useState(false)
   const [sheetHeight, setSheetHeight] = useState(0)
+  const [data, setData] = useState<Array<HeliumActionSheetItemType>>([])
   const { t } = useTranslation()
   const colors = useColors()
-  const offset = useSharedValue(0)
 
-  const animatedStyles = useAnimatedStyle(() => {
-    return {
-      transform: [{ translateY: offset.value + sheetHeight }],
-    }
-  })
-
-  const animate = useCallback(
-    (val: number) => {
-      offset.value = withSpring(val, {
-        damping: 80,
-        overshootClamping: true,
-        restDisplacementThreshold: 0.1,
-        restSpeedThreshold: 0.1,
-        stiffness: 500,
-      })
-    },
-    [offset],
-  )
+  useEffect(() => {
+    setData(propsData)
+  }, [propsData])
 
   useEffect(() => {
     let nextSheetHeight =
-      data.length * HeliumActionSheetItemHeight + 156 + (insets?.bottom || 0)
+      data.length * HeliumActionSheetItemHeight + 200 + (insets?.bottom || 0)
     if (maxModalHeight && nextSheetHeight > maxModalHeight) {
       nextSheetHeight = maxModalHeight
     }
     setSheetHeight(nextSheetHeight)
-    animate(nextSheetHeight)
-  }, [animate, data.length, insets?.bottom, maxModalHeight])
+  }, [data.length, insets?.bottom, maxModalHeight])
 
   const handlePresentModalPress = useCallback(async () => {
     setModalVisible(true)
@@ -104,15 +80,6 @@ const HeliumActionSheet = ({
     setModalVisible(false)
   }, [])
 
-  useVisible({ onDisappear: handleClose })
-
-  useEffect(() => {
-    if (modalVisible) {
-      offset.value = 0
-      animate(-sheetHeight)
-    }
-  }, [animate, modalVisible, offset, sheetHeight])
-
   const keyExtractor = useCallback((item) => item.value, [])
 
   const buttonTitle = useMemo(() => {
@@ -120,7 +87,7 @@ const HeliumActionSheet = ({
       return initialValue
     }
     const item = data.find((d) => d.value === selectedValue)
-    return item?.label || ''
+    return item?.labelShort || item?.label || ''
   }, [data, initialValue, selectedValue])
 
   const selected = useCallback(
@@ -175,7 +142,12 @@ const HeliumActionSheet = ({
           justifyContent="center"
           borderRadius="ms"
         >
-          <Text variant="medium" fontSize={18} style={styles.cancelText}>
+          <Text
+            variant="medium"
+            fontSize={18}
+            style={styles.cancelText}
+            maxFontSizeMultiplier={1.2}
+          >
             {t('generic.cancel')}
           </Text>
         </TouchableOpacityBox>
@@ -242,55 +214,19 @@ const HeliumActionSheet = ({
   return (
     <Box {...boxProps}>
       {displayText}
-
-      <Modal
-        transparent
-        visible={modalVisible}
-        onRequestClose={handleClose}
-        animationType="fade"
+      <HeliumBottomSheet
+        isVisible={modalVisible}
+        onClose={handleClose}
+        sheetHeight={sheetHeight}
+        title={title}
       >
-        <BlurBox position="absolute" top={0} bottom={0} left={0} right={0} />
-        <Box flex={1}>
-          <TouchableOpacityBox flex={1} onPress={handleClose} />
-          <ReAnimatedBox
-            style={animatedStyles}
-            borderTopLeftRadius="l"
-            borderTopRightRadius="l"
-            height={sheetHeight}
-            backgroundColor="white"
-            paddingHorizontal="lx"
-          >
-            <Box
-              flexDirection="row"
-              borderBottomWidth={1}
-              style={styles.divider}
-              marginTop="s"
-              marginBottom="m"
-              justifyContent="space-between"
-              alignItems="center"
-            >
-              <Text color="purpleGray" variant="body2">
-                {title}
-              </Text>
-              <TouchableOpacityBox
-                onPress={handleClose}
-                height={50}
-                justifyContent="center"
-                paddingHorizontal="m"
-                marginEnd="n_m"
-              >
-                <Close color={colors.purpleGray} height={14} width={14} />
-              </TouchableOpacityBox>
-            </Box>
-            <FlatList
-              data={data}
-              keyExtractor={keyExtractor}
-              renderItem={renderItem}
-            />
-            {footer}
-          </ReAnimatedBox>
-        </Box>
-      </Modal>
+        <FlatList
+          data={data}
+          keyExtractor={keyExtractor}
+          renderItem={renderItem}
+        />
+        {footer}
+      </HeliumBottomSheet>
     </Box>
   )
 }

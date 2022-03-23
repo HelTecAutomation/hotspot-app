@@ -1,21 +1,33 @@
 import React, { useEffect, useState } from 'react'
 import { useNavigation } from '@react-navigation/native'
 import { useAsync } from 'react-async-hook'
-import { StyleSheet } from 'react-native'
+import { Platform, StyleSheet } from 'react-native'
 import { useTranslation } from 'react-i18next'
-import { BarCodeScanner, BarCodeScannerResult } from 'expo-barcode-scanner'
+import { useSelector } from 'react-redux'
+import { BarCodeScanner } from 'expo-barcode-scanner'
 import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet'
+import { BarCodeScanningResult, Camera } from 'expo-camera'
 import Box from '../../../components/Box'
 import Text from '../../../components/Text'
 import Crosshair from './Crosshair'
-import { wp } from '../../../utils/layout'
+import { wp, ww } from '../../../utils/layout'
 import Close from '../../../assets/images/close.svg'
 import TouchableOpacityBox from '../../../components/TouchableOpacityBox'
+import useAlert from '../../../utils/useAlert'
 import useHaptic from '../../../utils/useHaptic'
 import BSHandle from '../../../components/BSHandle'
 import { useSpacing } from '../../../theme/themeHooks'
-import { useAppLinkContext } from '../../../providers/AppLinkProvider'
-import { AppLinkCategoryType } from '../../../providers/appLinkTypes'
+import {
+  AddressType,
+  InvalidAddressError,
+  MismatchedAddressError,
+  useAppLinkContext,
+} from '../../../providers/AppLinkProvider'
+import {
+  AppLinkCategoryType,
+  AppLinkLocation,
+} from '../../../providers/appLinkTypes'
+import { RootState } from '../../../store/rootReducer'
 
 type Props = {
   scanType?: AppLinkCategoryType
@@ -24,18 +36,20 @@ type Props = {
 const ScanView = ({ scanType = 'payment', showBottomSheet = true }: Props) => {
   const { t } = useTranslation()
   const { triggerNavHaptic, triggerNotification } = useHaptic()
+  const { showOKAlert } = useAlert()
   const [scanned, setScanned] = useState(false)
   const navigation = useNavigation()
   const spacing = useSpacing()
+  const hotspots = useSelector(
+    (state: RootState) => state.hotspots.hotspots.data,
+  )
 
   const { handleBarCode } = useAppLinkContext()
 
   useEffect(() => {
-    const unsubscribe = navigation.addListener('focus', () => {
+    return navigation.addListener('focus', () => {
       setScanned(false)
     })
-
-    return unsubscribe
   }, [navigation])
 
   const { result: permissions } = useAsync(
@@ -48,23 +62,94 @@ const ScanView = ({ scanType = 'payment', showBottomSheet = true }: Props) => {
     triggerNavHaptic()
   }
 
-  const handleBarCodeScanned = async (result: BarCodeScannerResult) => {
+  const handleBarCodeScanned = async (result: BarCodeScanningResult) => {
     if (scanned) return
 
     try {
-      await handleBarCode(result, scanType)
+      await handleBarCode(result, scanType, undefined, (scanResult) => {
+        if (scanResult.type === 'hotspot_location') {
+          const { hotspotAddress } = scanResult as AppLinkLocation
+          const hotspot = hotspots.find((h) => h.address === hotspotAddress)
+          if (!hotspot) throw new InvalidAddressError()
+        }
+      })
 
       setScanned(true)
       triggerNotification('success')
     } catch (error) {
-      handleFailedScan()
+      handleFailedScan(error)
     }
   }
 
-  const handleFailedScan = () => {
+  const handleFailedScan = async (error: Error) => {
     setScanned(true)
     setTimeout(() => setScanned(false), 2000)
-    triggerNotification('error')
+    const isInvalidHotspotAddress =
+      error instanceof InvalidAddressError &&
+      error.addressType === AddressType.HotspotAddress
+    const isInvalidSender =
+      error instanceof InvalidAddressError &&
+      error.addressType === AddressType.SenderAddress
+    const isMismatchedSender =
+      error instanceof MismatchedAddressError &&
+      error.addressType === AddressType.SenderAddress
+    if (isInvalidSender) {
+      await showOKAlert({
+        titleKey: 'send.scan.parse_code_error',
+        messageKey: 'send.scan.invalid_sender_address',
+      })
+    } else if (isMismatchedSender) {
+      await showOKAlert({
+        titleKey: 'send.scan.parse_code_error',
+        messageKey: 'send.scan.mismatched_sender_address',
+      })
+    } else if (isInvalidHotspotAddress) {
+      await showOKAlert({
+        titleKey: 'send.scan.parse_code_error',
+        messageKey: 'send.scan.invalid_hotspot_address',
+      })
+    } else {
+      // Default to haptic error notification
+      triggerNotification('error')
+    }
+  }
+
+  const CameraPreview = () => {
+    if (Platform.OS === 'android') {
+      return (
+        <Box
+          height={ww * (4 / 3)}
+          width={ww}
+          position="absolute"
+          top={30}
+          bottom={0}
+          left={0}
+          right={0}
+        >
+          <Camera
+            onBarCodeScanned={!scanned ? handleBarCodeScanned : undefined}
+            barCodeScannerSettings={
+              !scanned
+                ? {
+                    barCodeTypes: [BarCodeScanner.Constants.BarCodeType.qr],
+                  }
+                : undefined
+            }
+            style={StyleSheet.absoluteFillObject}
+            ratio="4:3"
+          />
+        </Box>
+      )
+    }
+    return (
+      <Camera
+        onBarCodeScanned={handleBarCodeScanned}
+        barCodeScannerSettings={{
+          barCodeTypes: [BarCodeScanner.Constants.BarCodeType.qr],
+        }}
+        style={StyleSheet.absoluteFillObject}
+      />
+    )
   }
 
   if (!permissions) {
@@ -85,12 +170,8 @@ const ScanView = ({ scanType = 'payment', showBottomSheet = true }: Props) => {
   }
 
   return (
-    <Box flex={1}>
-      <BarCodeScanner
-        onBarCodeScanned={handleBarCodeScanned}
-        barCodeTypes={[BarCodeScanner.Constants.BarCodeType.qr]}
-        style={StyleSheet.absoluteFillObject}
-      />
+    <Box flex={1} backgroundColor="black">
+      <CameraPreview />
       <CloseButton onPress={navBack} />
       <Box flex={0.7} justifyContent="center" alignItems="center">
         <Crosshair width={wp(65)} height={wp(65)} color="white" />

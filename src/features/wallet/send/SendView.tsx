@@ -11,7 +11,7 @@ import { Address } from '@helium/crypto-react-native'
 import { useAsync } from 'react-async-hook'
 import { useSelector } from 'react-redux'
 import { TransferHotspotV1 } from '@helium/transactions'
-import { some } from 'lodash'
+import { isEqual, some } from 'lodash'
 import { RootState } from '../../../store/rootReducer'
 import Box from '../../../components/Box'
 import useHaptic from '../../../utils/useHaptic'
@@ -33,18 +33,18 @@ import {
   makeBurnTxn,
   makeBuyerTransferHotspotTxn,
   makePaymentTxn,
-  makeSellerTransferHotspotTxn,
   getMemoBytesLeft,
+  makeTransferV2Txn,
 } from '../../../utils/transactions'
 import {
   getAccount,
   getChainVars,
+  getHotspotDetails,
   getHotspotsLastChallengeActivity,
 } from '../../../utils/appDataClient'
 import * as Logger from '../../../utils/logger'
 import TransferBanner from '../../hotspots/transfers/TransferBanner'
 import {
-  createTransfer,
   deleteTransfer,
   getTransfer,
   Transfer,
@@ -64,21 +64,28 @@ import {
   AppLinkCategoryType,
 } from '../../../providers/appLinkTypes'
 import { MainTabNavigationProp } from '../../../navigation/main/tabTypes'
+import { isDataOnly } from '../../../utils/hotspotUtils'
 
 type Props = {
   scanResult?: AppLink
   sendType?: AppLinkCategoryType
   hotspotAddress?: string
+  isDisabled: boolean
   isSeller?: boolean
   canSubmit?: boolean
+  lockedPaymentAddress?: string
+  warning?: string
 }
 
 const SendView = ({
   scanResult,
   sendType,
   hotspotAddress,
+  isDisabled,
   isSeller,
   canSubmit = true,
+  lockedPaymentAddress,
+  warning,
 }: Props) => {
   const tabNavigation = useNavigation<MainTabNavigationProp>()
   const sendNavigation = useNavigation<SendNavigationProps>()
@@ -90,12 +97,17 @@ const SendView = ({
     (state: RootState) => state.heliumData.blockHeight,
   )
   const currentOraclePrice = useSelector(
-    (state: RootState) => state.heliumData.currentOraclePrice,
+    (state: RootState) => state.heliumData.currentOraclePrice?.price,
+    isEqual,
+  )
+  const isDeployModeEnabled = useSelector(
+    (state: RootState) => state.app.isDeployModeEnabled,
   )
   const [type, setType] = useState<AppLinkCategoryType>(sendType || 'payment')
-  const [isLocked, setIsLocked] = useState(false)
+  const [isLocked, setIsLocked] = useState(isDisabled)
   const [isValid, setIsValid] = useState(false)
   const [hasSufficientBalance, setHasSufficientBalance] = useState(false)
+  const [disableSubmit, setDisableSubmit] = useState(false)
   const [transferData, setTransferData] = useState<Transfer>()
   const [fee, setFee] = useState<Balance<NetworkTokens>>(
     new Balance(0, CurrencyType.networkToken),
@@ -116,7 +128,7 @@ const SendView = ({
   const [sendDetails, setSendDetails] = useState<Array<SendDetails>>([
     {
       id: '0',
-      address: '',
+      address: lockedPaymentAddress || '',
       addressAlias: '',
       addressLoading: false,
       amount: '',
@@ -147,7 +159,16 @@ const SendView = ({
 
   useAsync(async () => {
     if (type === 'transfer' && hotspotAddress && blockHeight) {
-      const chainVars = await getChainVars()
+      const gateway = await getHotspotDetails(hotspotAddress)
+      if (isDataOnly(gateway)) {
+        setLastReportedActivity('')
+        setHasValidActivity(true)
+        setStalePocBlockCount(0)
+        return
+      }
+      const chainVars = await getChainVars([
+        'transfer_hotspot_stale_poc_blocks',
+      ])
       const staleBlockCount = chainVars.transferHotspotStalePocBlocks as number
       const reportedActivity = await getHotspotsLastChallengeActivity(
         hotspotAddress,
@@ -188,7 +209,7 @@ const SendView = ({
 
   // process scan results
   useEffect(() => {
-    if (!scanResult) return
+    if (!scanResult || isDeployModeEnabled || !currentOraclePrice) return
     setType(scanResult.type)
     const getAmountAndBalance = (scanAmount?: string | number) => {
       let amount = ''
@@ -234,7 +255,7 @@ const SendView = ({
       )
     } else {
       const { amount, balanceAmount } = getAmountAndBalance(scanResult.amount)
-      const balanceDc = balanceAmount.toDataCredits(currentOraclePrice?.price)
+      const balanceDc = balanceAmount.toDataCredits(currentOraclePrice)
       scannedSendDetails = [
         {
           id: 'transfer0',
@@ -264,15 +285,21 @@ const SendView = ({
     const hasPresetAmount = some(scannedSendDetails, ({ amount }) => !!amount)
     if (hasPresetAmount) setIsLocked(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scanResult])
+  }, [scanResult, currentOraclePrice])
 
   // validate transaction
   useEffect(() => {
     if (type === 'transfer') {
       const { address } = sendDetails[0]
       if (isSeller) {
-        setIsValid(Address.isValid(address) && (hasValidActivity || false))
-        setHasSufficientBalance(true)
+        const hasBalance =
+          fee && fee.integerBalance <= (account?.balance?.integerBalance || 0)
+        setIsValid(
+          Address.isValid(address) &&
+            (hasBalance || false) &&
+            (hasValidActivity || false),
+        )
+        setHasSufficientBalance(hasBalance || false)
       } else {
         const isValidSellerAddress = transferData
           ? Address.isValid(transferData.seller)
@@ -376,37 +403,22 @@ const SendView = ({
   }
 
   const handleSellerTransfer = useCallback(async () => {
-    const { address, balanceAmount } = sendDetails[0]
-    const seller = await getAddress()
-    if (!hotspotAddress || !seller) {
-      throw new Error('missing hotspot or seller for transfer')
+    const { address } = sendDetails[0]
+    const owner = await getAddress()
+    if (!hotspotAddress || !owner) {
+      throw new Error('TransferV2: missing hotspot or seller for transfer')
     }
-    const partialTxn = await makeSellerTransferHotspotTxn(
+    const gateway = await getHotspotDetails(hotspotAddress)
+    if (!gateway?.speculativeNonce) {
+      throw new Error('TransferV2: missing gateway speculativeNonce')
+    }
+    return makeTransferV2Txn(
       hotspotAddress,
+      owner,
       address,
-      seller,
-      balanceAmount.integerBalance,
+      gateway.speculativeNonce,
     )
-    if (!partialTxn) {
-      Alert.alert(t('generic.error'), t('send.error'))
-      throw new Error('failed to create seller TransferHotspotV1 transaction')
-    }
-    const transfer = await createTransfer(
-      hotspotAddress,
-      seller?.b58,
-      address,
-      partialTxn.toString(),
-      balanceAmount.integerBalance,
-    )
-    if (!transfer) {
-      Alert.alert(
-        t('transfer.exists_alert_title'),
-        t('transfer.exists_alert_body'),
-      )
-      throw new Error('transfer already exists')
-    }
-    return undefined
-  }, [sendDetails, hotspotAddress, t])
+  }, [sendDetails, hotspotAddress])
 
   const checkTransferAmountChanged = useCallback(
     (transfer: Transfer) => {
@@ -511,6 +523,7 @@ const SendView = ({
 
   const handleSubmit = useCallback(async () => {
     if (!canSubmit) return
+    setDisableSubmit(true)
     try {
       const txn = await constructTxn()
       if (txn) {
@@ -524,6 +537,7 @@ const SendView = ({
         Alert.alert(t('generic.error'), t('send.error'))
       }
     }
+    setDisableSubmit(false)
   }, [
     canSubmit,
     constructTxn,
@@ -552,9 +566,11 @@ const SendView = ({
           fee={fee}
           hasSufficientBalance={hasSufficientBalance}
           hasValidActivity={hasValidActivity}
+          isDisabled={isDisabled}
           isLocked={isLocked}
+          isLockedAddress={!!lockedPaymentAddress}
           isSeller={isSeller}
-          isValid={isValid}
+          isValid={isValid && !disableSubmit}
           lastReportedActivity={lastReportedActivity}
           onScanPress={navScan}
           onSubmit={handleSubmit}
@@ -564,14 +580,15 @@ const SendView = ({
           type={type}
           unlockForm={unlockForm}
           updateSendDetails={updateSendDetails}
+          warning={warning}
         />
       </Box>
       {isSeller && (
         <Text
-          variant="body3"
+          variant="body2"
           color="gray"
           paddingBottom="xl"
-          paddingHorizontal="l"
+          paddingHorizontal="xl"
           textAlign="center"
         >
           {t('transfer.fine_print')}

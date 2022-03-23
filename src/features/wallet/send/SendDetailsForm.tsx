@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import { ActivityIndicator, Alert } from 'react-native'
 import { useTranslation } from 'react-i18next'
 import { Address } from '@helium/crypto-react-native'
@@ -28,15 +28,21 @@ import {
 import * as Logger from '../../../utils/logger'
 import useHaptic from '../../../utils/useHaptic'
 import { AppLinkCategoryType } from '../../../providers/appLinkTypes'
+import {
+  getHotspotDetails,
+  getValidatorDetails,
+} from '../../../utils/appDataClient'
 
 type Props = {
   account?: Account
   fee: Balance<NetworkTokens>
   isLocked: boolean
+  isLockedAddress: boolean
   isSeller?: boolean
   index: number
   lastReportedActivity?: string
   onScanPress: () => void
+  setSendDisabled: (sendDisabled: boolean) => void
   sendDetails: SendDetails
   transferData?: Transfer
   type: AppLinkCategoryType
@@ -48,11 +54,13 @@ const SendDetailsForm = ({
   account,
   fee,
   isLocked,
+  isLockedAddress,
   isSeller,
   lastReportedActivity,
   onScanPress,
   sendDetails,
   transferData,
+  setSendDisabled,
   type,
   updateSendDetails,
 }: Props) => {
@@ -75,6 +83,8 @@ const SendDetailsForm = ({
   )
   const [dcAmount, setDcAmount] = useState<string>(sendDetails.dcAmount)
   const [memo, setMemo] = useState<string>(sendDetails.memo)
+  const [isHotspotAddress, setIsHotspotAddress] = useState<boolean>()
+  const [hotspotLoadFailed, setHotspotLoadFailed] = useState(false)
 
   useEffect(() => {
     updateSendDetails(sendDetails.id, {
@@ -164,6 +174,70 @@ const SendDetailsForm = ({
     }
   }
 
+  const checkHotspotAddress = useCallback(async () => {
+    setAddressLoading(true)
+    try {
+      const hotspot = await getHotspotDetails(address)
+      setHotspotLoadFailed(false)
+      if (hotspot.address === address) {
+        setIsHotspotAddress(true)
+        setSendDisabled(true)
+        setAddressLoading(false)
+        return
+      }
+    } catch (e) {
+      if (e?.message === 'Request failed with status code 404') {
+        setIsHotspotAddress(false)
+        setHotspotLoadFailed(false)
+        setSendDisabled(false)
+      } else {
+        setHotspotLoadFailed(true)
+        setSendDisabled(true)
+      }
+    }
+    try {
+      const validator = await getValidatorDetails(address)
+      setHotspotLoadFailed(false)
+      if (validator.address === address) {
+        setIsHotspotAddress(true)
+        setSendDisabled(true)
+        setAddressLoading(false)
+        return
+      }
+    } catch (e) {
+      if (e?.message === 'Request failed with status code 404') {
+        setIsHotspotAddress(false)
+        setHotspotLoadFailed(false)
+        setSendDisabled(false)
+      } else {
+        setHotspotLoadFailed(true)
+        setSendDisabled(true)
+      }
+    }
+    setAddressLoading(false)
+  }, [address, setSendDisabled])
+
+  // set isHotspotAddress for default address
+  useAsync(async () => {
+    if (
+      address !== undefined &&
+      address !== '' &&
+      isHotspotAddress === undefined
+    ) {
+      await checkHotspotAddress()
+    }
+  }, [])
+
+  const handleAddressChange = useCallback((text: string) => {
+    setIsHotspotAddress(false)
+    setAddress(text)
+  }, [])
+
+  const onDoneEditingAddress = async () => {
+    if (!Address.isValid(address)) return
+    await checkHotspotAddress()
+  }
+
   const renderLockedPaymentForm = () => (
     <>
       <LockedField
@@ -196,21 +270,45 @@ const SendDetailsForm = ({
 
   const renderPaymentForm = () => (
     <>
-      <InputField
-        isFirst
-        defaultValue={address}
-        onChange={setAddress}
-        label={t('send.address.label')}
-        placeholder={t('send.address.placeholder')}
-        extra={
-          <AddressExtra
-            addressLoading={addressLoading}
-            isValidAddress={Address.isValid(address)}
-            onScanPress={onScanPress}
-          />
-        }
-        footer={<AddressAliasFooter addressAlias={addressAlias} />}
-      />
+      {isLockedAddress ? (
+        <LockedField label={t('send.address.label')} value={address} />
+      ) : (
+        <InputField
+          isFirst
+          defaultValue={address}
+          onChange={handleAddressChange}
+          onEndEditing={onDoneEditingAddress}
+          label={t('send.address.label')}
+          placeholder={t('send.address.placeholder')}
+          extra={
+            <AddressExtra
+              addressLoading={addressLoading}
+              isValidAddress={
+                Address.isValid(address) &&
+                !hotspotLoadFailed &&
+                isHotspotAddress !== undefined &&
+                !isHotspotAddress
+              }
+              onScanPress={onScanPress}
+            />
+          }
+          footer={
+            <Box>
+              <AddressAliasFooter addressAlias={addressAlias} />
+              {hotspotLoadFailed && (
+                <Text color="redMain" variant="body2">
+                  {t('send.load_failed')}
+                </Text>
+              )}
+              {!hotspotLoadFailed && isHotspotAddress && (
+                <Text color="redMain" variant="body2">
+                  {t('send.not_valid_address')}
+                </Text>
+              )}
+            </Box>
+          }
+        />
+      )}
       <InputField
         type="decimal-pad"
         testID="AmountInput"
@@ -221,7 +319,7 @@ const SendDetailsForm = ({
         placeholder={t('send.amount.placeholder')}
         extra={
           <TouchableOpacityBox onPress={setMaxAmount}>
-            <Text fontSize={12} color="primaryMain">
+            <Text fontSize={12} color="primaryMain" variant="body2">
               {t('send.sendMax')}
             </Text>
           </TouchableOpacityBox>
@@ -258,28 +356,32 @@ const SendDetailsForm = ({
 
   const renderBurnForm = () => (
     <>
-      <InputField
-        defaultValue={address}
-        onChange={setAddress}
-        label={t('send.address.label')}
-        placeholder={t('send.address.placeholder')}
-        extra={
-          Address.isValid(address) ? (
-            <Box padding="s" position="absolute" right={0}>
-              <Check />
-            </Box>
-          ) : (
-            <TouchableOpacityBox
-              onPress={onScanPress}
-              padding="s"
-              position="absolute"
-              right={0}
-            >
-              <QrCode width={16} color={primaryMain} />
-            </TouchableOpacityBox>
-          )
-        }
-      />
+      {isLockedAddress ? (
+        <LockedField label={t('send.address.label')} value={address} />
+      ) : (
+        <InputField
+          defaultValue={address}
+          onChange={setAddress}
+          label={t('send.address.label')}
+          placeholder={t('send.address.placeholder')}
+          extra={
+            Address.isValid(address) ? (
+              <Box padding="s" position="absolute" right={0}>
+                <Check />
+              </Box>
+            ) : (
+              <TouchableOpacityBox
+                onPress={onScanPress}
+                padding="s"
+                position="absolute"
+                right={0}
+              >
+                <QrCode width={16} color={primaryMain} />
+              </TouchableOpacityBox>
+            )
+          }
+        />
+      )}
       <InputField
         type="decimal-pad"
         defaultValue={amount}
@@ -305,39 +407,39 @@ const SendDetailsForm = ({
   )
 
   const renderSellerTransferForm = () => (
-    <>
-      <InputField
-        defaultValue={address}
-        onChange={setAddress}
-        label={t('send.address.label_transfer')}
-        placeholder={t('send.address.placeholder')}
-        extra={
-          Address.isValid(address) ? (
-            <Box padding="s" position="absolute" right={0}>
-              <Check />
-            </Box>
-          ) : (
-            <TouchableOpacityBox
-              onPress={onScanPress}
-              padding="s"
-              position="absolute"
-              right={0}
-            >
-              <QrCode width={16} color={primaryMain} />
-            </TouchableOpacityBox>
-          )
-        }
-      />
-      <InputField
-        type="decimal-pad"
-        defaultValue={amount}
-        onChange={setFormAmount}
-        value={amount}
-        numberOfLines={2}
-        label={t('send.amount.label_transfer')}
-        placeholder={t('send.amount.placeholder_transfer')}
-      />
-    </>
+    <InputField
+      defaultValue={address}
+      onChange={handleAddressChange}
+      onEndEditing={onDoneEditingAddress}
+      label={t('send.address.label_transfer')}
+      placeholder={t('send.address.placeholder')}
+      extra={
+        <AddressExtra
+          addressLoading={addressLoading}
+          isValidAddress={
+            Address.isValid(address) &&
+            !hotspotLoadFailed &&
+            isHotspotAddress !== undefined &&
+            !isHotspotAddress
+          }
+          onScanPress={onScanPress}
+        />
+      }
+      footer={
+        <Box>
+          {hotspotLoadFailed && (
+            <Text color="redMain" variant="body2">
+              {t('send.load_failed')}
+            </Text>
+          )}
+          {!hotspotLoadFailed && isHotspotAddress && (
+            <Text color="redMain" variant="body2">
+              {t('send.not_valid_address')}
+            </Text>
+          )}
+        </Box>
+      }
+    />
   )
 
   const renderBuyerTransferForm = () => (

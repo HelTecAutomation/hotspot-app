@@ -1,11 +1,11 @@
 import { Address } from '@helium/crypto-react-native'
-import { AnyTransaction, PendingTransaction } from '@helium/http'
 import {
   AddGatewayV1,
   AssertLocationV2,
   PaymentV2,
   TokenBurnV1,
   TransferHotspotV1,
+  TransferHotspotV2,
 } from '@helium/transactions'
 import Balance, { CurrencyType } from '@helium/currency'
 import { getKeypair } from './secureAccount'
@@ -22,7 +22,7 @@ export const encodeMemoString = (utf8Input: string | undefined) => {
   return buff.toString('base64')
 }
 
-export const decodeMemoString = (base64String: string | undefined) => {
+export const decodeMemoString = (base64String: string | undefined | null) => {
   if (!base64String) return ''
   const buff = Buffer.from(base64String, 'base64')
   return buff.toString('utf8')
@@ -112,6 +112,28 @@ export const makeBurnTxn = async (
   return tokenBurnTxn.sign({ payer: keypair })
 }
 
+export const makeTransferV2Txn = async (
+  gatewayB58: string,
+  owner: Address,
+  newOwnerB58: string,
+  gatewaySpeculativeNonce: number,
+): Promise<TransferHotspotV2> => {
+  const keypair = await getKeypair()
+  const newOwner = Address.fromB58(newOwnerB58)
+  const gateway = Address.fromB58(gatewayB58)
+  const nonce = gatewaySpeculativeNonce + 1
+
+  if (!keypair) throw new Error('missing keypair')
+
+  const transferV2Txn = new TransferHotspotV2({
+    gateway,
+    owner,
+    newOwner,
+    nonce,
+  })
+  return transferV2Txn.sign({ owner: keypair })
+}
+
 export const makeSellerTransferHotspotTxn = async (
   gatewayB58: string,
   buyerB58: string,
@@ -150,31 +172,6 @@ export const makeBuyerTransferHotspotTxn = async (
   const keypair = await getKeypair()
   return transferHotspotTxn.sign({ buyer: keypair })
 }
-
-export const getPayer = (txn: AnyTransaction | PendingTransaction) => {
-  const pending = txn as PendingTransaction
-  if (pending.txn) {
-    return pending.txn.payer?.b58 || pending.txn.payer
-  }
-
-  const nonPending = (txn as unknown) as PaymentV2
-  return nonPending.payer?.b58 || nonPending.payer
-}
-
-export const isPayer = (
-  address: string | null = null,
-  txn: AnyTransaction | PendingTransaction,
-) => {
-  if (!address) return false
-
-  const payer = getPayer(txn)
-  if (!payer) return false
-
-  return payer === address
-}
-
-export const isPendingTransaction = (item: unknown) =>
-  !!(item as PendingTransaction).createdAt
 
 export const getInteger = (stringAmount: string) => {
   return (stringAmount.split(decimalSeparator)[0] || '0')

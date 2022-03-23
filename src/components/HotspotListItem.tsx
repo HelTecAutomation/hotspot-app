@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useEffect, useMemo, useState } from 'react'
+import React, { memo, useCallback, useMemo, useState } from 'react'
 import { Hotspot } from '@helium/http'
 import animalName from 'angry-purple-tiger'
 import { useTranslation } from 'react-i18next'
@@ -7,10 +7,11 @@ import LocationIcon from '@assets/images/location-icon.svg'
 import Balance, { NetworkTokens } from '@helium/currency'
 import SkeletonPlaceholder from 'react-native-skeleton-placeholder'
 import { Pressable } from 'react-native'
+import { useAsync } from 'react-async-hook'
 import Box from './Box'
 import Text from './Text'
 import useCurrency from '../utils/useCurrency'
-import { isRelay } from '../utils/hotspotUtils'
+import { isDataOnly, isRelay } from '../utils/hotspotUtils'
 import HexBadge from '../features/hotspots/details/HexBadge'
 import { useColors } from '../theme/themeHooks'
 import Signal from '../assets/images/signal.svg'
@@ -18,7 +19,7 @@ import VisibilityOff from '../assets/images/visibility_off.svg'
 
 type HotspotListItemProps = {
   onPress?: (hotspot: Hotspot) => void
-  hotspot: Hotspot
+  gateway: Hotspot
   totalReward?: Balance<NetworkTokens>
   showCarot?: boolean
   loading?: boolean
@@ -33,7 +34,7 @@ type HotspotListItemProps = {
 
 const HotspotListItem = ({
   onPress,
-  hotspot,
+  gateway,
   totalReward,
   loading = false,
   showCarot = false,
@@ -48,36 +49,32 @@ const HotspotListItem = ({
   const { t } = useTranslation()
   const colors = useColors()
   const { toggleConvertHntToCurrency, hntBalanceToDisplayVal } = useCurrency()
-  const handlePress = useCallback(() => onPress?.(hotspot), [hotspot, onPress])
+  const handlePress = useCallback(() => onPress?.(gateway), [gateway, onPress])
   const [reward, setReward] = useState('')
 
-  const updateReward = useCallback(async () => {
+  useAsync(async () => {
     if (!totalReward) return
 
     const nextReward = await hntBalanceToDisplayVal(totalReward, false)
     setReward(`+${nextReward}`)
   }, [hntBalanceToDisplayVal, totalReward])
 
-  useEffect(() => {
-    updateReward()
-  }, [updateReward])
-
   const locationText = useMemo(() => {
-    const { geocode: geo } = hotspot
+    const { geocode: geo } = gateway as Hotspot
     if (!geo || (!geo.longStreet && !geo.longCity && !geo.shortCountry)) {
       return t('hotspot_details.no_location_title')
     }
     return `${geo.longStreet}, ${geo.longCity}, ${geo.shortCountry}`
-  }, [hotspot, t])
+  }, [gateway, t])
 
-  const isRelayed = useMemo(() => isRelay(hotspot?.status?.listenAddrs), [
-    hotspot?.status,
+  const isRelayed = useMemo(() => isRelay(gateway?.status?.listenAddrs), [
+    gateway?.status,
   ])
 
   const statusBackgroundColor = useMemo(() => {
-    if (hidden) return 'grayLightText'
-    return hotspot.status?.online === 'online' ? 'greenOnline' : 'yellow'
-  }, [hidden, hotspot.status?.online])
+    if (hidden || isDataOnly(gateway)) return 'grayLightText'
+    return gateway.status?.online === 'online' ? 'greenOnline' : 'yellow'
+  }, [hidden, gateway])
 
   return (
     <Box marginBottom="xxs">
@@ -106,9 +103,10 @@ const HotspotListItem = ({
                   paddingEnd="s"
                   ellipsizeMode="tail"
                   numberOfLines={2}
+                  maxFontSizeMultiplier={1.2}
                   maxWidth={220}
                 >
-                  {animalName(hotspot.address)}
+                  {animalName(gateway.address)}
                 </Text>
                 {hidden && <VisibilityOff height={10} width={10} />}
               </Box>
@@ -117,6 +115,7 @@ const HotspotListItem = ({
                   variant="body3Light"
                   color={hidden ? 'grayLightText' : 'blueGray'}
                   marginTop="s"
+                  maxFontSizeMultiplier={1.2}
                 >
                   {locationText}
                 </Text>
@@ -138,6 +137,7 @@ const HotspotListItem = ({
                       variant="body2"
                       color={hidden ? 'grayLightText' : 'grayDarkText'}
                       paddingEnd="s"
+                      maxFontSizeMultiplier={1.2}
                     >
                       {reward}
                     </Text>
@@ -155,6 +155,7 @@ const HotspotListItem = ({
                       variant="regular"
                       fontSize={12}
                       marginLeft="xs"
+                      maxFontSizeMultiplier={1.2}
                     >
                       {t('hotspot_details.distance_away', {
                         distance: distanceAway,
@@ -164,7 +165,8 @@ const HotspotListItem = ({
                 )}
                 {showRewardScale && (
                   <HexBadge
-                    rewardScale={hotspot.rewardScale}
+                    hotspotId={gateway.address}
+                    rewardScale={(gateway as Hotspot).rewardScale}
                     pressable={false}
                     badge={false}
                     fontSize={12}
@@ -178,19 +180,21 @@ const HotspotListItem = ({
                       variant="regular"
                       fontSize={12}
                       marginLeft="xs"
+                      maxFontSizeMultiplier={1.2}
                     >
                       {t('generic.meters', {
-                        distance: hotspot?.elevation || 0,
+                        distance: (gateway as Hotspot)?.elevation || 0,
                       })}
                     </Text>
-                    {hotspot?.gain !== undefined && (
+                    {(gateway as Hotspot)?.gain !== undefined && (
                       <Text
                         color="grayText"
                         variant="regular"
                         fontSize={12}
                         marginLeft="xs"
+                        maxFontSizeMultiplier={1.2}
                       >
-                        {(hotspot.gain / 10).toFixed(1) +
+                        {(((gateway as Hotspot).gain || 0) / 10).toFixed(1) +
                           t('antennas.onboarding.dbi')}
                       </Text>
                     )}
@@ -202,6 +206,7 @@ const HotspotListItem = ({
                     variant="regular"
                     fontSize={12}
                     marginLeft="s"
+                    maxFontSizeMultiplier={1.2}
                   >
                     {t('hotspot_details.relayed')}
                   </Text>

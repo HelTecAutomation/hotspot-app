@@ -1,7 +1,12 @@
 import React from 'react'
 import { NavigationContainerRef } from '@react-navigation/native'
 import { LockScreenRequestType } from './main/tabTypes'
-import { AppLink, AppLinkPayment } from '../providers/appLinkTypes'
+import {
+  AppLink,
+  AppLinkPayment,
+  LinkWalletRequest,
+  SignHotspotRequest,
+} from '../providers/appLinkTypes'
 
 export const navigationRef = React.createRef<NavigationContainerRef>()
 
@@ -30,6 +35,13 @@ const viewValidator = (address: string) => {
   })
 }
 
+const updateHotspotLocation = (params: {
+  hotspotAddress: string
+  location: { longitude: number; latitude: number }
+}) => {
+  navigationRef.current?.navigate('HotspotLocationUpdateScreen', params)
+}
+
 const confirmAddGateway = (addGatewayTxn: string) => {
   const params = {
     addGatewayTxn,
@@ -41,4 +53,21 @@ const confirmAddGateway = (addGatewayTxn: string) => {
   })
 }
 
-export default { lock, send, viewHotspot, viewValidator, confirmAddGateway }
+const linkWallet = (request: LinkWalletRequest) => {
+  navigationRef.current?.navigate('LinkWallet', request)
+}
+
+const signHotspot = (request: SignHotspotRequest) => {
+  navigationRef.current?.navigate('SignHotspot', request)
+}
+
+export default {
+  lock,
+  send,
+  viewHotspot,
+  viewValidator,
+  confirmAddGateway,
+  updateHotspotLocation,
+  linkWallet,
+  signHotspot,
+}

@@ -1,3 +1,5 @@
+import { WalletLink } from '@helium/react-native-sdk'
+
 export const AppLinkCategories = [
   'payment',
   'dc_burn',
@@ -5,6 +7,9 @@ export const AppLinkCategories = [
   'hotspot',
   'validator',
   'add_gateway',
+  'hotspot_location',
+  'link_wallet',
+  'sign_hotspot',
 ] as const
 export type AppLinkCategoryType = typeof AppLinkCategories[number]
 
@@ -20,6 +25,7 @@ export type AppLink = {
 
 export type AppLinkPayment = {
   type: AppLinkCategoryType
+  senderAddress?: string
   payees: Array<Payee>
 }
 
@@ -29,3 +35,18 @@ export type Payee = {
   amount?: string | number
   memo?: string
 }
+
+export type AppLinkLocation = {
+  type: AppLinkCategoryType
+  hotspotAddress: string
+  latitude: number
+  longitude: number
+}
+
+export type LinkWalletRequest = {
+  type: AppLinkCategoryType
+} & WalletLink.LinkWalletRequest
+
+export type SignHotspotRequest = {
+  type: AppLinkCategoryType
+} & WalletLink.SignHotspotRequest
